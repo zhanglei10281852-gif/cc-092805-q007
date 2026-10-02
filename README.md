@@ -14,7 +14,11 @@
 
 ## 初始化与启动
 
-先执行 python -m app.cli init-db 和 python -m app.cli check-db，再用 uvicorn app.main:app --host 0.0.0.0 --port 8432 启动。健康检查为 GET /api/system/health。殡葬业务接口位于 /api/mortuary，涵盖档案、交接、资源、预约、服务订单、墓位权属、账单和时间线。
+先执行 python -m app.cli init-db 和 python -m app.cli check-db，再用 uvicorn app.main:app --host 0.0.0.0 --port 8432 启动。健康检查为 GET /api/system/health。殡葬业务接口位于 /api/mortuary，涵盖档案、保管交接、多段运输行程、资源、预约、服务订单、墓位权属、账单和时间线。
+
+### 多段运输行程
+
+跨区接运（医院 → 县级殡仪站换车 → 市馆冷藏室）按 `/api/mortuary/transport-trips` 建模：行程由按序区段组成，每个区段携带起止站点、车辆与承运方、计划时间窗口、封签编号和有权确认角色。发车 `events/departed`、到达 `events/arrived`、异常停留 `events/abnormal_stop`、恢复 `events/resumed`、中途换车 `vehicle-change`、改线 `reroute` 与取消 `cancel` 都写入只追加的 `transport_events`，事件同时保留发生时间与报送时间，重复幂等键不会二次推进状态。区段必须到达并由指定角色核验封签（`confirm`）后，下一段才能发车；封签不符记为拒收。改线保留每个历史计划版本（`route_versions`），未完成区段按新版本重建，并自动重算受影响的设施预约（`impacts`）。协调员可通过 `GET /transport-trips/overview` 查看当前承运方、超时段与待确认节点，通过行程详情查看完整责任链；全部状态持久化在 SQLite，服务重启后可继续未完成行程。
 
 ## 测试与编译检查
 

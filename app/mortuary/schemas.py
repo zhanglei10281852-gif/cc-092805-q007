@@ -114,3 +114,107 @@ class PaymentCreate(BaseModel):
     channel: str = Field(min_length=2, max_length=40)
     external_reference: str = Field(min_length=4, max_length=120)
     received_by: str = Field(min_length=2, max_length=80)
+
+
+class TransportLegPlan(BaseModel):
+    from_station: str = Field(min_length=2, max_length=120)
+    to_station: str = Field(min_length=2, max_length=120)
+    vehicle_code: str = Field(min_length=2, max_length=60)
+    carrier: str = Field(default="", max_length=120)
+    seal_code: str = Field(min_length=4, max_length=80)
+    planned_start_at: datetime
+    planned_end_at: datetime
+    confirm_roles: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_window(self):
+        if self.to_station == self.from_station:
+            raise ValueError("区段起止站点不能相同")
+        if self.planned_end_at <= self.planned_start_at:
+            raise ValueError("区段计划到达时间必须晚于计划发车时间")
+        return self
+
+
+class TransportTripCreate(BaseModel):
+    case_id: int = Field(gt=0)
+    created_by: str = Field(min_length=2, max_length=80)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    planned_start_at: datetime
+    planned_end_at: datetime
+    legs: list[TransportLegPlan] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_chain(self):
+        if self.planned_end_at <= self.planned_start_at:
+            raise ValueError("行程计划结束时间必须晚于开始时间")
+        legs = self.legs
+        for index, leg in enumerate(legs):
+            if index > 0 and leg.from_station != legs[index - 1].to_station:
+                raise ValueError("相邻区段站点必须首尾相接")
+            if leg.planned_start_at < self.planned_start_at or leg.planned_end_at > self.planned_end_at:
+                raise ValueError("区段计划窗口必须落在行程计划窗口内")
+            if index > 0 and leg.planned_start_at < legs[index - 1].planned_start_at:
+                raise ValueError("区段必须按时间顺序排列")
+        return self
+
+
+class TransportEventReport(BaseModel):
+    actor: str = Field(min_length=2, max_length=80)
+    role: str = Field(default="", max_length=60)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    occurred_at: datetime
+    reported_at: datetime | None = None
+    note: str = Field(default="", max_length=1000)
+    observed_seal_code: str = Field(default="", max_length=80)
+    condition_note: str = Field(default="", max_length=1000)
+    reason: str = Field(default="", max_length=500)
+
+
+class TransportVehicleChange(BaseModel):
+    actor: str = Field(min_length=2, max_length=80)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    occurred_at: datetime
+    reported_at: datetime | None = None
+    new_vehicle_code: str = Field(min_length=2, max_length=60)
+    new_carrier: str = Field(default="", max_length=120)
+    new_seal_code: str = Field(min_length=4, max_length=80)
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class TransportCancel(BaseModel):
+    actor: str = Field(min_length=2, max_length=80)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    occurred_at: datetime
+    reported_at: datetime | None = None
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class TransportLegConfirm(BaseModel):
+    confirmed_by: str = Field(min_length=2, max_length=80)
+    role: str = Field(min_length=2, max_length=60)
+    observed_seal_code: str = Field(min_length=4, max_length=80)
+    condition_note: str = Field(default="", max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+class TransportReroute(BaseModel):
+    changed_by: str = Field(min_length=2, max_length=80)
+    reason: str = Field(min_length=2, max_length=500)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    planned_start_at: datetime | None = None
+    planned_end_at: datetime | None = None
+    legs: list[TransportLegPlan] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_chain(self):
+        legs = self.legs
+        for index, leg in enumerate(legs):
+            if index > 0 and leg.from_station != legs[index - 1].to_station:
+                raise ValueError("相邻区段站点必须首尾相接")
+            if leg.planned_end_at <= leg.planned_start_at:
+                raise ValueError("区段计划到达时间必须晚于计划发车时间")
+            if index > 0 and leg.planned_start_at < legs[index - 1].planned_start_at:
+                raise ValueError("区段必须按时间顺序排列")
+        if self.planned_start_at and self.planned_end_at and self.planned_end_at <= self.planned_start_at:
+            raise ValueError("行程计划结束时间必须晚于开始时间")
+        return self

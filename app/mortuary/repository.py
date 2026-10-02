@@ -72,6 +72,59 @@ CREATE TABLE IF NOT EXISTS mortuary_events (
  event_type TEXT NOT NULL, actor TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mortuary_event ON mortuary_events(aggregate_type,aggregate_id,id);
+CREATE TABLE IF NOT EXISTS transport_trips (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, case_id INTEGER NOT NULL REFERENCES mortuary_cases(id),
+ origin_station TEXT NOT NULL, destination_station TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'planned', route_version INTEGER NOT NULL DEFAULT 1,
+ planned_start_at TEXT NOT NULL, planned_end_at TEXT NOT NULL,
+ created_by TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+ completed_at TEXT, cancelled_at TEXT, cancel_reason TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ UNIQUE(case_id,idempotency_key)
+);
+CREATE TABLE IF NOT EXISTS transport_legs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, trip_id INTEGER NOT NULL REFERENCES transport_trips(id),
+ route_version INTEGER NOT NULL, seq INTEGER NOT NULL,
+ from_station TEXT NOT NULL, to_station TEXT NOT NULL,
+ vehicle_code TEXT NOT NULL, carrier TEXT NOT NULL DEFAULT '',
+ seal_code TEXT NOT NULL,
+ planned_start_at TEXT NOT NULL, planned_end_at TEXT NOT NULL,
+ confirm_roles_json TEXT NOT NULL DEFAULT '[]',
+ status TEXT NOT NULL DEFAULT 'pending',
+ departed_at TEXT, arrived_at TEXT,
+ confirmed_by TEXT NOT NULL DEFAULT '', confirmer_role TEXT NOT NULL DEFAULT '',
+ observed_seal_code TEXT NOT NULL DEFAULT '', condition_note TEXT NOT NULL DEFAULT '',
+ confirmed_at TEXT, rejected_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ UNIQUE(trip_id,route_version,seq)
+);
+CREATE INDEX IF NOT EXISTS idx_transport_leg_trip ON transport_legs(trip_id,route_version,seq);
+CREATE TABLE IF NOT EXISTS transport_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, trip_id INTEGER NOT NULL REFERENCES transport_trips(id),
+ leg_id INTEGER REFERENCES transport_legs(id),
+ route_version INTEGER NOT NULL, seq INTEGER,
+ event_type TEXT NOT NULL, actor TEXT NOT NULL,
+ occurred_at TEXT NOT NULL, reported_at TEXT NOT NULL,
+ idempotency_key TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL,
+ UNIQUE(trip_id,event_type,idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_transport_event_trip ON transport_events(trip_id,occurred_at,id);
+CREATE INDEX IF NOT EXISTS idx_transport_event_leg ON transport_events(leg_id,id);
+CREATE TABLE IF NOT EXISTS transport_route_versions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, trip_id INTEGER NOT NULL REFERENCES transport_trips(id),
+ version INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '',
+ legs_json TEXT NOT NULL, changed_by TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL,
+ UNIQUE(trip_id,version)
+);
+CREATE TABLE IF NOT EXISTS transport_impacts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, trip_id INTEGER NOT NULL REFERENCES transport_trips(id),
+ route_version INTEGER NOT NULL, reservation_id INTEGER NOT NULL REFERENCES facility_reservations(id),
+ resource_code TEXT NOT NULL, start_at TEXT NOT NULL, end_at TEXT NOT NULL,
+ detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_transport_impact_trip ON transport_impacts(trip_id,route_version);
 '''
 
 
@@ -137,3 +190,62 @@ class MortuaryRepository:
             item["payload"] = json.loads(item.pop("payload_json"))
             result.append(item)
         return result
+
+    def trip(self, trip_id: int) -> dict[str, Any] | None:
+        return self.one(self.connection.execute("SELECT * FROM transport_trips WHERE id=?", (trip_id,)).fetchone())
+
+    def trip_key(self, case_id: int, key: str) -> dict[str, Any] | None:
+        return self.one(self.connection.execute("SELECT * FROM transport_trips WHERE case_id=? AND idempotency_key=?", (case_id, key)).fetchone())
+
+    def active_trip_for_case(self, case_id: int) -> dict[str, Any] | None:
+        return self.one(self.connection.execute("SELECT * FROM transport_trips WHERE case_id=? AND status IN ('planned','in_progress') ORDER BY id DESC LIMIT 1", (case_id,)).fetchone())
+
+    def list_trips(self, status: str | None, limit: int) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM transport_trips"
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status=?"
+            params.append(status)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        return [dict(row) for row in self.connection.execute(sql, params).fetchall()]
+
+    def legs(self, trip_id: int, route_version: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute("SELECT * FROM transport_legs WHERE trip_id=? AND route_version=? ORDER BY seq", (trip_id, route_version)).fetchall()
+        return [dict(row) for row in rows]
+
+    def leg(self, leg_id: int) -> dict[str, Any] | None:
+        return self.one(self.connection.execute("SELECT * FROM transport_legs WHERE id=?", (leg_id,)).fetchone())
+
+    def transport_event_key(self, trip_id: int, event_type: str, key: str) -> dict[str, Any] | None:
+        return self.one(self.connection.execute("SELECT * FROM transport_events WHERE trip_id=? AND event_type=? AND idempotency_key=?", (trip_id, event_type, key)).fetchone())
+
+    def transport_events(self, trip_id: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute("SELECT * FROM transport_events WHERE trip_id=? ORDER BY id", (trip_id,)).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item.pop("payload_json"))
+            result.append(item)
+        return result
+
+    def route_versions(self, trip_id: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute("SELECT * FROM transport_route_versions WHERE trip_id=? ORDER BY version", (trip_id,)).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["legs"] = json.loads(item.pop("legs_json"))
+            result.append(item)
+        return result
+
+    def impacts(self, trip_id: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute("SELECT * FROM transport_impacts WHERE trip_id=? ORDER BY route_version,id", (trip_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def trip_reservations(self, case_id: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT r.*,f.code resource_code,f.kind resource_kind FROM facility_reservations r JOIN facility_resources f ON f.id=r.resource_id "
+            "WHERE r.case_id=? AND r.status='confirmed' ORDER BY r.start_at",
+            (case_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]

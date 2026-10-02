@@ -90,9 +90,49 @@ def command_mortuary_demo() -> int:
         )
         cases = client.get("/api/mortuary/cases")
         resources = client.get("/api/mortuary/resources")
-    result = {"case_status": case.status_code, "resource_status": resource.status_code, "cases": len(cases.json()), "resources": len(resources.json())}
+        trip_case = client.post(
+            "/api/mortuary/cases?actor=cli-intake",
+            json={"external_ref": "CLI-DEMO-TRIP-001", "decedent_name": "演示运输档案", "identity_number": None,
+                  "death_time": "2026-09-28T08:00:00Z", "received_from": "合作医院", "family_contact": "演示联系人",
+                  "family_phone": "13800000000", "special_notes": "CLI 运输冒烟数据"},
+        )
+        trip_status = 0
+        if trip_case.status_code == 201:
+            case_id = trip_case.json()["id"]
+            trip = client.post(
+                "/api/mortuary/transport-trips",
+                json={"case_id": case_id, "created_by": "cli-coordinator", "idempotency_key": "cli-trip-demo-0001",
+                      "planned_start_at": "2026-09-28T09:00:00Z", "planned_end_at": "2026-09-28T12:00:00Z",
+                      "legs": [
+                          {"from_station": "合作医院太平间", "to_station": "县级殡仪站", "vehicle_code": "沪A-CLI1",
+                           "carrier": "演示承运一队", "seal_code": "CLI-SEAL-1", "confirm_roles": ["station_keeper"],
+                           "planned_start_at": "2026-09-28T09:00:00Z", "planned_end_at": "2026-09-28T10:30:00Z"},
+                          {"from_station": "县级殡仪站", "to_station": "市馆冷藏室", "vehicle_code": "沪B-CLI2",
+                           "carrier": "演示承运二队", "seal_code": "CLI-SEAL-2", "confirm_roles": ["cold_keeper"],
+                           "planned_start_at": "2026-09-28T10:45:00Z", "planned_end_at": "2026-09-28T12:00:00Z"}]},
+            )
+            codes = [trip.status_code]
+            if trip.status_code in {201, 200}:
+                trip_id = trip.json()["id"]
+                for seq, seal, role in ((1, "CLI-SEAL-1", "station_keeper"), (2, "CLI-SEAL-2", "cold_keeper")):
+                    codes.append(client.post(
+                        f"/api/mortuary/transport-trips/{trip_id}/legs/{seq}/events/departed",
+                        json={"actor": f"cli-driver-{seq}", "idempotency_key": f"cli-depart-{seq}",
+                              "occurred_at": f"2026-09-28T{9 + seq}:00:00Z"}).status_code)
+                    codes.append(client.post(
+                        f"/api/mortuary/transport-trips/{trip_id}/legs/{seq}/events/arrived",
+                        json={"actor": f"cli-driver-{seq}", "idempotency_key": f"cli-arrive-{seq}",
+                              "occurred_at": f"2026-09-28T{10 + seq}:00:00Z"}).status_code)
+                    codes.append(client.post(
+                        f"/api/mortuary/transport-trips/{trip_id}/legs/{seq}/confirm",
+                        json={"confirmed_by": f"cli-keeper-{seq}", "role": role,
+                              "observed_seal_code": seal, "idempotency_key": f"cli-confirm-{seq}"}).status_code)
+                overview = client.get("/api/mortuary/transport-trips/overview")
+                codes.append(overview.status_code)
+            trip_status = 0 if all(code in {200, 201} for code in codes) else 1
+    result = {"case_status": case.status_code, "resource_status": resource.status_code, "cases": len(cases.json()), "resources": len(resources.json()), "transport_demo": trip_status}
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if case.status_code in {201, 409} and resource.status_code in {201, 409} and cases.status_code == 200 and resources.status_code == 200 else 1
+    return 0 if case.status_code in {201, 409} and resource.status_code in {201, 409} and cases.status_code == 200 and resources.status_code == 200 and trip_status == 0 else 1
 
 
 def main() -> int:

@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Query
 
-from app.mortuary.schemas import BurialRightCreate, BurialRightRenew, CaseCreate, CustodyAccept, CustodyTransferCreate, InvoiceCreate, PaymentCreate, ReservationCreate, ResourceCreate, ServiceOrderCreate
+from app.core.errors import ValidationError
+from app.mortuary.schemas import BurialRightCreate, BurialRightRenew, CaseCreate, CustodyAccept, CustodyTransferCreate, InvoiceCreate, PaymentCreate, ReservationCreate, ResourceCreate, ServiceOrderCreate, TransportCancel, TransportEventReport, TransportLegConfirm, TransportReroute, TransportTripCreate, TransportVehicleChange
 from app.mortuary.service import MortuaryService
+from app.mortuary.transport import LIVE_EVENT_TYPES, TransportService
 
 router = APIRouter(prefix="/api/mortuary", tags=["mortuary"])
 
@@ -68,3 +70,44 @@ def get_invoice(invoice_id: int) -> dict:
 @router.post("/invoices/{invoice_id}/payments")
 def pay(invoice_id: int, payload: PaymentCreate) -> dict:
     return MortuaryService().pay(invoice_id, payload.model_dump())
+
+
+# ---------------------------------------------------------------- 运输行程
+
+@router.post("/transport-trips", status_code=201)
+def create_transport_trip(payload: TransportTripCreate) -> dict:
+    return TransportService().create_trip(payload.model_dump())
+
+@router.get("/transport-trips")
+def list_transport_trips(status: str | None = None, limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+    return TransportService().list_trips(status, limit)
+
+@router.get("/transport-trips/overview")
+def transport_overview() -> dict:
+    return TransportService().overview()
+
+@router.get("/transport-trips/{trip_id}")
+def get_transport_trip(trip_id: int) -> dict:
+    return TransportService().get_trip(trip_id)
+
+@router.post("/transport-trips/{trip_id}/legs/{seq}/events/{event_type}")
+def report_transport_event(trip_id: int, seq: int, event_type: str, payload: TransportEventReport) -> dict:
+    if event_type not in LIVE_EVENT_TYPES:
+        raise ValidationError(f"事件类型必须是 {sorted(LIVE_EVENT_TYPES)}")
+    return TransportService().report_event(trip_id, seq, event_type, payload.model_dump())
+
+@router.post("/transport-trips/{trip_id}/legs/{seq}/vehicle-change")
+def change_transport_vehicle(trip_id: int, seq: int, payload: TransportVehicleChange) -> dict:
+    return TransportService().change_vehicle(trip_id, seq, payload.model_dump())
+
+@router.post("/transport-trips/{trip_id}/legs/{seq}/confirm")
+def confirm_transport_leg(trip_id: int, seq: int, payload: TransportLegConfirm) -> dict:
+    return TransportService().confirm_leg(trip_id, seq, payload.model_dump())
+
+@router.post("/transport-trips/{trip_id}/reroute")
+def reroute_transport_trip(trip_id: int, payload: TransportReroute) -> dict:
+    return TransportService().reroute(trip_id, payload.model_dump())
+
+@router.post("/transport-trips/{trip_id}/cancel")
+def cancel_transport_trip(trip_id: int, payload: TransportCancel) -> dict:
+    return TransportService().cancel_trip(trip_id, payload.model_dump())

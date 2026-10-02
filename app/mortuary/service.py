@@ -54,6 +54,7 @@ class MortuaryService:
         case["custody_transfers"] = [dict(row) for row in self.connection.execute("SELECT * FROM custody_transfers WHERE case_id=? ORDER BY id", (case_id,)).fetchall()]
         case["reservations"] = [dict(row) for row in self.connection.execute("SELECT r.*,f.code resource_code,f.kind resource_kind FROM facility_reservations r JOIN facility_resources f ON f.id=r.resource_id WHERE r.case_id=? ORDER BY r.start_at", (case_id,)).fetchall()]
         case["service_orders"] = [dict(row) for row in self.connection.execute("SELECT * FROM funeral_service_orders WHERE case_id=? ORDER BY id", (case_id,)).fetchall()]
+        case["transport_trips"] = [dict(row) for row in self.connection.execute("SELECT id,status,route_version,origin_station,destination_station,planned_start_at,planned_end_at FROM transport_trips WHERE case_id=? ORDER BY id", (case_id,)).fetchall()]
         case["timeline"] = self.repository.timeline("case", case_id)
         return case
 

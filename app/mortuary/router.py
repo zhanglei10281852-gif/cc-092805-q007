@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Path, Query
 
 from app.mortuary.schemas import BurialRightCreate, BurialRightRenew, CaseCreate, CustodyAccept, CustodyTransferCreate, InvoiceCreate, PaymentCreate, ReservationCreate, ResourceCreate, ServiceOrderCreate
 from app.mortuary.service import MortuaryService
+from app.mortuary.transport_schemas import AbnormalStopReport, ArriveReport, DelayReport, DepartReport, SegmentConfirm, TransportReroute, TransportTripCreate, TripCancel, VehicleChangeReport
+from app.mortuary.transport_service import TransportService
 
 router = APIRouter(prefix="/api/mortuary", tags=["mortuary"])
 
@@ -68,3 +70,65 @@ def get_invoice(invoice_id: int) -> dict:
 @router.post("/invoices/{invoice_id}/payments")
 def pay(invoice_id: int, payload: PaymentCreate) -> dict:
     return MortuaryService().pay(invoice_id, payload.model_dump())
+
+
+# ---------------------------------------------------------------- 运输行程
+@router.post("/transport-trips", status_code=201)
+def create_transport_trip(payload: TransportTripCreate) -> dict:
+    data = payload.model_dump(mode="json")
+    return TransportService().create_trip(data, data["created_by"])
+
+
+@router.get("/transport-trips")
+def list_transport_trips(status: str | None = None, case_id: int | None = None, limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+    return TransportService().list_trips(status, case_id, limit)
+
+
+@router.get("/transport-trips/coordination")
+def transport_coordination(status: str | None = "in_progress", overdue_only: bool = False) -> dict:
+    return TransportService().coordination_overview(status, overdue_only)
+
+
+@router.get("/transport-trips/{trip_id}")
+def get_transport_trip(trip_id: int) -> dict:
+    return TransportService().get_trip(trip_id)
+
+
+@router.post("/transport-trips/{trip_id}/cancel")
+def cancel_transport_trip(trip_id: int, payload: TripCancel) -> dict:
+    return TransportService().cancel_trip(trip_id, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/reroute")
+def reroute_transport_trip(trip_id: int, payload: TransportReroute) -> dict:
+    return TransportService().reroute(trip_id, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/segments/{sequence_index}/departure")
+def report_departure(trip_id: int, sequence_index: int = Path(ge=0, le=39), payload: DepartReport = ...) -> dict:
+    return TransportService().report_departure(trip_id, sequence_index, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/segments/{sequence_index}/arrival")
+def report_arrival(trip_id: int, sequence_index: int = Path(ge=0, le=39), payload: ArriveReport = ...) -> dict:
+    return TransportService().report_arrival(trip_id, sequence_index, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/segments/{sequence_index}/delays")
+def report_delay(trip_id: int, sequence_index: int = Path(ge=0, le=39), payload: DelayReport = ...) -> dict:
+    return TransportService().report_delay(trip_id, sequence_index, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/segments/{sequence_index}/abnormal-stops")
+def report_abnormal_stop(trip_id: int, sequence_index: int = Path(ge=0, le=39), payload: AbnormalStopReport = ...) -> dict:
+    return TransportService().report_abnormal_stop(trip_id, sequence_index, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/segments/{sequence_index}/vehicle-changes")
+def report_vehicle_change(trip_id: int, sequence_index: int = Path(ge=0, le=39), payload: VehicleChangeReport = ...) -> dict:
+    return TransportService().report_vehicle_change(trip_id, sequence_index, payload.model_dump(mode="json"))
+
+
+@router.post("/transport-trips/{trip_id}/segments/{sequence_index}/confirm")
+def confirm_segment(trip_id: int, sequence_index: int = Path(ge=0, le=39), payload: SegmentConfirm = ...) -> dict:
+    return TransportService().confirm_segment(trip_id, sequence_index, payload.model_dump(mode="json"))
